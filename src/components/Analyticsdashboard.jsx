@@ -53,8 +53,6 @@ import {
 // ═══════════════════════════════════════════════════════════════════════════════
 // PROFESSIONAL COLOR SYSTEM — Semantic, domain-consistent, accessible
 // ═══════════════════════════════════════════════════════════════════════════════
-// One deliberate token per business domain. Same color always means
-// the same thing across the entire dashboard. Low-saturation, restrained.
 const P = {
   steel: "#3D6A91",      // Revenue / Invoicing
   teal: "#2F8577",       // Collections / inflow / positive
@@ -67,9 +65,9 @@ const P = {
   trend: "#33415C",      // Secondary line / cumulative
   steelLight: "#A7C0D6",
   plumLight: "#C9C0E0",
+  emerald: "#2F8577",
 };
 
-// Categorical fallback for genuinely unordered multi-category data
 const CC = [
   P.steel, P.teal, P.amber, P.brick, P.plum, P.clay, P.slate, P.sky,
 ];
@@ -135,6 +133,13 @@ const isBankInflow = (b) =>
   b.entry_type === "payment_received" || b.flow_type === "inflow";
 const isSoftwareInflow = (s) =>
   s.flow_type === "inflow" || (s.flow_type == null && Number(s.amount) > 0);
+
+const safeDivPct = (num, den) => {
+  const a = Number(num || 0);
+  const b = Number(den || 0);
+  if (!b) return 0;
+  return (a / b) * 100;
+};
 
 const fyRange = (startYear) => {
   const start = `${startYear}-04-01`;
@@ -255,7 +260,6 @@ const PctTooltip = ({ active, payload, label }) => {
   );
 };
 
-// Mixed-unit tooltip for composed charts (e.g. headcount vs cost)
 const FlexibleTooltip = ({ active, payload, label, moneyKeys = [] }) => {
   if (!active || !payload?.length) return null;
   return (
@@ -291,11 +295,11 @@ const FlexibleTooltip = ({ active, payload, label, moneyKeys = [] }) => {
 };
 
 // ─── KPI Card ─────────────────────────────────────────────────────────────────
-const KpiCard = ({ label, value, sub, icon: Icon, color, trend, alert }) => (
+const KpiCard = ({ label, value, sub, icon: Icon, color, trend, alert, highlight }) => (
   <div
     className={`bg-white rounded-2xl border p-4 shadow-sm hover:shadow-md transition-all duration-200 ${
       alert ? "border-amber-200 bg-amber-50/30" : "border-slate-200"
-    }`}
+    } ${highlight ? "ring-1 ring-blue-200/60" : ""}`}
   >
     <div className="flex items-start justify-between mb-3">
       <div
@@ -304,7 +308,7 @@ const KpiCard = ({ label, value, sub, icon: Icon, color, trend, alert }) => (
       >
         <Icon className="w-5 h-5" style={{ color }} />
       </div>
-      {trend !== undefined && (
+      {trend !== undefined && trend !== null && (
         <span
           className={`flex items-center gap-0.5 text-[11px] font-semibold ${
             trend >= 0 ? "text-emerald-600" : "text-rose-500"
@@ -392,7 +396,7 @@ const ChartCard = ({
 // CHART COMPONENTS — Professional, reusable, consistent
 // ═══════════════════════════════════════════════════════════════════════════════
 
-// 1. TIME SERIES AREA — For continuous trends (revenue, collections, salary, bank)
+// 1. TIME SERIES AREA — For continuous trends
 const TimeSeriesArea = ({
   data,
   lines,
@@ -473,7 +477,7 @@ const TimeSeriesArea = ({
   );
 };
 
-// 2. RANK BAR — Horizontal scrollable bar for rankings (clients, departments, etc.)
+// 2. RANK BAR — Horizontal scrollable bar for rankings
 const RankBar = ({
   data,
   dataKey,
@@ -639,7 +643,7 @@ const HScrollBar = ({
   );
 };
 
-// 5. STACKED BAR — For part-to-whole composition (statutory, etc.)
+// 5. STACKED BAR — For part-to-whole composition
 const StackedBar = ({ data, bars, xKey, height = 260 }) => {
   if (!data?.length) return null;
   const minW = Math.max(400, data.length * 50);
@@ -687,7 +691,7 @@ const StackedBar = ({ data, bars, xKey, height = 260 }) => {
   );
 };
 
-// 6. DONUT CHART — For proportions (status, billable, pay head)
+// 6. DONUT CHART — For proportions
 const DonutChart = ({
   data,
   colors = CC,
@@ -725,7 +729,7 @@ const DonutChart = ({
   );
 };
 
-// 7. COMPOSED METRIC — Bar + Line on dual axes (e.g. invoice value + collection %)
+// 7. COMPOSED METRIC — Bar + Line on dual axes
 const ComposedMetric = ({
   data,
   xKey,
@@ -996,8 +1000,6 @@ export default function AnalyticsDashboard() {
   const [rpcTopEarners, setRpcTopEarners] = useState([]);
   const [rpcCnSummary, setRpcCnSummary] = useState([]);
   const [rpcPayTrend, setRpcPayTrend] = useState([]);
-  
-  // ══ NEW: 4 Advanced Analytics RPCs ══
   const [rpcCashflowProj, setRpcCashflowProj] = useState([]);
   const [rpcPaymentsMade, setRpcPaymentsMade] = useState([]);
   const [rpcCollectionDelay, setRpcCollectionDelay] = useState([]);
@@ -1187,6 +1189,121 @@ export default function AnalyticsDashboard() {
     const bOut = fBank.filter((b) => !isBankInflow(b)).reduce((s, b) => s + Math.abs(Number(b.amount || 0)), 0);
     return { totalInv, netV, totalOut, totalRcv, totalOS, totalSal, totalCN, activeEmp, colPct, bIn, bOut, bNet: bIn - bOut };
   }, [fI, fP, fO, fC, fSal, fTeam, fBank]);
+
+  // ── Manpower specific KPIs ──────────────────────────────────────────────
+  const manpowerKpis = useMemo(() => {
+    const internalHC = fTeam.filter(t => t.status === "Active").length;
+    // External headcount from OS payouts
+    const externalHC = fO.reduce((s, o) => s + Number(o.employee_count || 0), 0);
+    const totalHC = internalHC + externalHC;
+    
+    // MoM growth calculations
+    const internalByMonth = {};
+    const externalByMonth = {};
+    
+    fTeam.forEach(t => {
+      if (t.doj && t.status === "Active") {
+        const m = toYYYYMM(t.doj);
+        if (m) internalByMonth[m] = (internalByMonth[m] || 0) + 1;
+      }
+    });
+    
+    fO.forEach(o => {
+      const m = o.effective_month;
+      if (m) externalByMonth[m] = (externalByMonth[m] || 0) + Number(o.employee_count || 0);
+    });
+    
+    const months = [...new Set([...Object.keys(internalByMonth), ...Object.keys(externalByMonth)])].sort();
+    const lastMonth = months[months.length - 1];
+    const prevMonth = months[months.length - 2];
+    
+    const intMoM = prevMonth && internalByMonth[prevMonth] 
+      ? ((internalByMonth[lastMonth] || 0) - (internalByMonth[prevMonth] || 0)) / (internalByMonth[prevMonth] || 1) * 100
+      : 0;
+    const extMoM = prevMonth && externalByMonth[prevMonth]
+      ? ((externalByMonth[lastMonth] || 0) - (externalByMonth[prevMonth] || 0)) / (externalByMonth[prevMonth] || 1) * 100
+      : 0;
+    
+    // Productivity metrics
+    const totalRevenue = kpis.totalInv || 0;
+    const totalFee = kpis.netV || 0;
+    const lastProfit = rpcProfit.length > 0 ? Number(rpcProfit[rpcProfit.length - 1]?.profit_pre_tds || 0) : 0;
+    
+    return {
+      internalHC,
+      externalHC,
+      totalHC,
+      intMoM,
+      extMoM,
+      revenuePerEmp: totalHC > 0 ? totalRevenue / totalHC : 0,
+      feePerEmp: totalHC > 0 ? totalFee / totalHC : 0,
+      profitPerEmp: totalHC > 0 ? lastProfit / totalHC : 0,
+      ratio: externalHC > 0 ? internalHC / externalHC : 0,
+    };
+  }, [fTeam, fO, kpis, rpcProfit]);
+
+  // ── Manpower Trend Data ────────────────────────────────────────────────
+  const manpowerTrendData = useMemo(() => {
+    const byMonth = {};
+    // Internal from team DOJ
+    fTeam.forEach(t => {
+      if (t.doj) {
+        const m = toYYYYMM(t.doj);
+        if (m) {
+          if (!byMonth[m]) byMonth[m] = { month: m, internal: 0, external: 0 };
+          byMonth[m].internal += 1;
+        }
+      }
+    });
+    // External from OS payouts
+    fO.forEach(o => {
+      const m = o.effective_month;
+      if (m) {
+        if (!byMonth[m]) byMonth[m] = { month: m, internal: 0, external: 0 };
+        byMonth[m].external += Number(o.employee_count || 0);
+      }
+    });
+    
+    return Object.values(byMonth)
+      .sort((a, b) => a.month.localeCompare(b.month))
+      .map(m => ({ ...m, x: fmtMonth(m.month) }));
+  }, [fTeam, fO]);
+
+  // ── Manpower MoM Table Data ─────────────────────────────────────────────
+  const manpowerMoMData = useMemo(() => {
+    const byMonth = {};
+    fTeam.forEach(t => {
+      if (t.doj && t.status === "Active") {
+        const m = toYYYYMM(t.doj);
+        if (m) {
+          if (!byMonth[m]) byMonth[m] = { month: m, internal: 0 };
+          byMonth[m].internal += 1;
+        }
+      }
+    });
+    fO.forEach(o => {
+      const m = o.effective_month;
+      if (m) {
+        if (!byMonth[m]) byMonth[m] = { month: m, external: 0 };
+        byMonth[m].external = (byMonth[m].external || 0) + Number(o.employee_count || 0);
+      }
+    });
+    
+    const sorted = Object.values(byMonth)
+      .sort((a, b) => a.month.localeCompare(b.month));
+    
+    return sorted.map((r, i) => {
+      const prev = sorted[i - 1];
+      const intMoM = prev?.internal ? ((r.internal - prev.internal) / prev.internal * 100) : null;
+      const extMoM = prev?.external ? ((r.external - prev.external) / prev.external * 100) : null;
+      return {
+        ...r,
+        intMoM,
+        extMoM,
+        monthLabel: fmtMonth(r.month),
+      };
+    });
+  }, [fTeam, fO]);
 
   // ═══════════════════════════════════════════════════════════════════════════════
   // CHART DATA
@@ -1551,11 +1668,9 @@ export default function AnalyticsDashboard() {
     [fI]
   );
 
-  // ═══════════════════════════════════════════════════════════════════════════════
-  // NEW ADVANCED COMPUTED DATA
-  // ═══════════════════════════════════════════════════════════════════════════════
+  // ── NEW ADVANCED COMPUTED DATA ──────────────────────────────────────────
 
-  // ── 15. CASHFLOW: Net position & variance ────────────────────────────────────
+  // 15. CASHFLOW: Net position & variance
   const cashflowKpis = useMemo(() => {
     if (!rpcCashflowProj.length) return null;
     const totalProjIn = rpcCashflowProj.reduce((s, r) => s + Number(r.projected_inflow || 0), 0);
@@ -1574,7 +1689,7 @@ export default function AnalyticsDashboard() {
     };
   }, [rpcCashflowProj]);
 
-  // ── 16. PAYMENTS MADE: by pay_head & department ──────────────────────────────
+  // 16. PAYMENTS MADE: by pay_head & department
   const paymentsMadeByHead = useMemo(() => {
     const m = {};
     rpcPaymentsMade.forEach(r => {
@@ -1606,7 +1721,7 @@ export default function AnalyticsDashboard() {
     return { total, entries, topHead, topHeadPct: total > 0 ? (topHeadAmt / total * 100) : 0 };
   }, [rpcPaymentsMade, paymentsMadeByHead]);
 
-  // ── 17. COLLECTION DELAY: buckets & risk metrics ─────────────────────────────
+  // 17. COLLECTION DELAY: buckets & risk metrics
   const delayBuckets = useMemo(() => {
     const ORDER = ['Paid','Not Yet Due','No Due Date','Overdue 1–15d','Overdue 16–30d','Overdue 31–60d','Overdue 60d+'];
     const m = {};
@@ -1631,7 +1746,7 @@ export default function AnalyticsDashboard() {
     return { totalOutstanding, overdueAmt, overdueCount, overduePct, criticalAmt, criticalCount: critical.length };
   }, [rpcCollectionDelay]);
 
-  // ── 18. BOUNCEBACK: summary metrics ──────────────────────────────────────────
+  // 18. BOUNCEBACK: summary metrics
   const bouncebackKpis = useMemo(() => {
     if (!rpcBounceback.length) return null;
     const totalBounced = rpcBounceback.reduce((s, r) => s + Number(r.bounce_amount || 0), 0);
@@ -1649,6 +1764,7 @@ export default function AnalyticsDashboard() {
   const statusOpts = [...new Set(invoices.map((i) => i.status).filter(Boolean))].map((s) => ({ value: s, label: s }));
   const payHOpts = [...new Set([...invoices.map((i) => i.pay_head), ...salaries.map((s) => s.pay_head)].filter(Boolean))].map((p) => ({ value: p, label: p }));
   const impMonthOpts = [...new Set(invoices.map((i) => toYYYYMM(i.invoice_date)).filter(Boolean))].sort().reverse().map((m) => ({ value: m, label: fmtMonth(m) }));
+
   if (loading) return (
     <div className="flex items-center justify-center h-64">
       <div className="flex flex-col items-center gap-3">
@@ -1939,8 +2055,88 @@ export default function AnalyticsDashboard() {
         </ChartCard>
       </div>
 
-      {/* ══ SECTION 6: INTERNAL TEAM ══ */}
-      <SH icon={Users} title="Internal Team" color={P.slate} count={`${fTeam.length} employees`} />
+      {/* ══ SECTION 6: INTERNAL TEAM (Enhanced with Manpower) ══ */}
+      <SH icon={Users} title="Internal Team & Manpower" color={P.slate} count={`${fTeam.length} employees`} />
+      
+      {/* Manpower KPI Cards */}
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+        <KpiCard label="Internal Headcount" value={fmtCount(manpowerKpis.internalHC)} sub="Active employees" icon={Users} color={P.slate} />
+        <KpiCard label="External Headcount" value={fmtCount(manpowerKpis.externalHC)} sub="OS payout employees" icon={Users} color={P.clay} />
+        <KpiCard label="Total Headcount" value={fmtCount(manpowerKpis.totalHC)} sub="Internal + External" icon={Users} color={P.plum} highlight />
+        <KpiCard label="Internal / External" value={manpowerKpis.ratio.toFixed(2)} sub="Ratio" icon={TrendingUp} color={P.teal} />
+      </div>
+
+      {/* Productivity Metrics */}
+      <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+        <KpiCard label="Revenue per Employee" value={fmt(manpowerKpis.revenuePerEmp)} sub="Revenue / Total HC" icon={FileText} color={P.steel} />
+        <KpiCard label="Fee per Employee" value={fmt(manpowerKpis.feePerEmp)} sub="Fee / Total HC" icon={Wallet} color={P.teal} />
+        <KpiCard label="Profit per Employee" value={fmt(manpowerKpis.profitPerEmp)} sub="Profit / Total HC" icon={TrendingUp} color={P.emerald} />
+      </div>
+
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+        {/* Manpower Trend — Line Chart */}
+        <ChartCard title="Headcount Trend" subtitle="Internal vs External — Line Chart">
+          {manpowerTrendData.length === 0 ? <Empty /> : (
+            <div style={{ height: 240 }}>
+              <ResponsiveContainer width="100%" height="100%">
+                <LineChart data={manpowerTrendData} margin={{ top: 5, right: 20, left: 0, bottom: 5 }}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" vertical={false} />
+                  <XAxis dataKey="x" tick={{ fontSize: 10, fill: "#94a3b8" }} tickLine={false} axisLine={false} />
+                  <YAxis tick={{ fontSize: 9, fill: "#94a3b8" }} tickLine={false} axisLine={false} width={30} />
+                  <Tooltip contentStyle={{ fontSize: 11, borderRadius: 10, border: "1px solid #e2e8f0" }} />
+                  <Legend wrapperStyle={{ fontSize: 11, paddingTop: 8 }} formatter={(v) => <span style={{ color: "#64748b" }}>{v}</span>} />
+                  <Line type="monotone" dataKey="internal" name="Internal" stroke={P.steel} strokeWidth={2} dot={{ r: 3, fill: P.steel, stroke: "#fff", strokeWidth: 2 }} />
+                  <Line type="monotone" dataKey="external" name="External" stroke={P.clay} strokeWidth={2} dot={{ r: 3, fill: P.clay, stroke: "#fff", strokeWidth: 2 }} />
+                </LineChart>
+              </ResponsiveContainer>
+            </div>
+          )}
+        </ChartCard>
+
+        {/* Manpower MoM Table */}
+        <ChartCard title="Manpower Trend with MoM Growth" subtitle="Internal vs External with MoM growth">
+          {manpowerMoMData.length === 0 ? <Empty msg="No manpower data" /> : (
+            <div className="overflow-auto" style={{ maxHeight: 320 }}>
+              <table className="w-full text-xs">
+                <thead className="sticky top-0 bg-white border-b border-slate-100">
+                  <tr>
+                    <th className="text-left py-2 pr-3 text-slate-400 font-semibold">Month</th>
+                    <th className="text-right py-2 pr-3 text-slate-400 font-semibold">Internal</th>
+                    <th className="text-right py-2 pr-3 text-slate-400 font-semibold">Int MoM %</th>
+                    <th className="text-right py-2 pr-3 text-slate-400 font-semibold">External</th>
+                    <th className="text-right py-2 pr-3 text-slate-400 font-semibold">Ext MoM %</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-50">
+                  {manpowerMoMData.map((r, i) => (
+                    <tr key={i} className="hover:bg-slate-50/50 transition-colors">
+                      <td className="py-2 pr-3 font-semibold text-slate-700">{r.monthLabel}</td>
+                      <td className="py-2 pr-3 text-right tabular-nums text-slate-700">{Number(r.internal || 0)}</td>
+                      <td className="py-2 pr-3 text-right tabular-nums">
+                        {r.intMoM != null ? (
+                          <span className={`font-bold text-[11px] ${r.intMoM >= 0 ? "text-emerald-600" : "text-rose-500"}`}>
+                            {r.intMoM >= 0 ? "↑" : "↓"}{Math.abs(r.intMoM).toFixed(1)}%
+                          </span>
+                        ) : <span className="text-slate-300">—</span>}
+                      </td>
+                      <td className="py-2 pr-3 text-right tabular-nums text-slate-700">{Number(r.external || 0)}</td>
+                      <td className="py-2 pr-3 text-right tabular-nums">
+                        {r.extMoM != null ? (
+                          <span className={`font-bold text-[11px] ${r.extMoM >= 0 ? "text-emerald-600" : "text-rose-500"}`}>
+                            {r.extMoM >= 0 ? "↑" : "↓"}{Math.abs(r.extMoM).toFixed(1)}%
+                          </span>
+                        ) : <span className="text-slate-300">—</span>}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </ChartCard>
+      </div>
+
+      {/* Existing Team Charts */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
         <ChartCard title="Headcount by Department" subtitle="Active vs total per department">
           {teamByDept.length === 0 ? <Empty /> : (
@@ -2757,10 +2953,6 @@ export default function AnalyticsDashboard() {
           </div>
         </>
       )}
-
-      {/* NOTE: Forecast/Growth/HR/Working Capital/Ratio cards requested are not added in this change.
-          Analyticsdashboard currently uses only its existing RPC set. Adding those sections requires
-          additional RPCs + computed datasets and is not safe to merge without verifying the RPC output shape. */}
 
       <div className="text-center py-4 text-[11px] text-slate-300">
         Analytics · {fy.label} · {new Date().toLocaleDateString("en-IN", { day: "numeric", month: "long", year: "numeric" })}
