@@ -427,12 +427,13 @@ const AddInvoiceModal = ({
         vertoFeePostTds: vertoFeePostTds.toFixed(2),
       }));
     } else {
-      const invoiceValue = baseAmount + gstCalc;
-      const receivable = invoiceValue - finalTds;
-
+      const finalGstNonOS = isManualGst ? Number(formData.gst) || 0 : gstCalc;
+      const invoiceValue  = baseAmount + finalGstNonOS;
+      const receivable    = invoiceValue - finalTds;
+    
       setFormData((prev) => ({
         ...prev,
-        gst: gstCalc.toFixed(2),
+        gst: isManualGst ? prev.gst : gstCalc.toFixed(2),   // ← respect manual
         tds: isManualTds ? prev.tds : tdsCalc.toFixed(2),
         invoiceValue: customRound(invoiceValue),
         receivableRs: customRound(receivable),
@@ -1320,7 +1321,7 @@ const AddInvoiceModal = ({
                         value={formData.gst || ""}
                         onChange={(e) => {
                           handleChange("gst", e.target.value);
-                          if (isOS) setIsManualGst(true);
+                          setIsManualGst(true);   // ← always, not just OS
                         }}
                         className={
                           gstMismatch
