@@ -85,8 +85,14 @@ const SearchableSelect = ({
   const wrapperRef = useRef(null);
 
   useEffect(() => {
-    if (!isOpen) setSearch(value || "");
-  }, [value, isOpen]);
+    if (!isOpen) {
+      const match = options.find((opt) =>
+        typeof opt === "string" ? opt === value : opt.value === value
+      );
+      const label = match ? (typeof match === "string" ? match : match.label) : "";
+      setSearch(label || value || "");
+    }
+  }, [value, isOpen, options]);
   useEffect(() => {
     const h = (e) => {
       if (wrapperRef.current && !wrapperRef.current.contains(e.target))
