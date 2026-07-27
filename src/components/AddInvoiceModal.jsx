@@ -127,6 +127,7 @@ const AddInvoiceModal = ({
   onClose,
   clients = [],
   selectedInvoice,
+  onSaved,
 }) => {
   const { role } = useAuth();
   const [entitiesList, setEntitiesList] = useState([]);
@@ -305,11 +306,16 @@ const AddInvoiceModal = ({
   }, [formData.client, clientsList]);
 
   // Populate form on edit — wait for banks to load
-  useEffect(() => {
-    if (!selectedInvoice || banks.length === 0) return;
-    setIsManualTds(false);
-    setIsManualGst(false);
-    setIsManualReceivable(false);
+// Populate form on edit — wait for banks to load
+useEffect(() => {
+  if (!selectedInvoice || banks.length === 0) return;
+  // Treat values already saved in the DB as manually locked, so the
+  // auto-calc effect below does NOT overwrite them the instant the
+  // form loads. They'll only auto-recalculate again if the user
+  // actively edits Pay / Verto Fee / TDS% / Gross Value afterward.
+  setIsManualTds(true);
+  setIsManualGst(true);
+  setIsManualReceivable(true);
 
     const selectedBank =
       banks.find((b) => b.id === selectedInvoice.bank_id) ||
@@ -744,13 +750,29 @@ const AddInvoiceModal = ({
       let insertedInvoice = null;
 
       if (selectedInvoice) {
+        // Support either .dbId or .id depending on how the parent built this object
+        const targetId = selectedInvoice.dbId ?? selectedInvoice.id;
+
+        if (!targetId) {
+          alert("❌ Cannot update — this invoice has no valid ID. Check the parent component.");
+          return;
+        }
+
         // For edit: remove receivable_amount if you want to keep that restriction
         const { receivable_amount, ...editableFields } = payload;
         const res = await supabase
           .from("invoices")
           .update(editableFields)
-          .eq("id", selectedInvoice.dbId);
+          .eq("id", targetId)
+          .select(); // forces Supabase to return updated rows so we can verify
+
         error = res.error;
+
+        if (!error && (!res.data || res.data.length === 0)) {
+          console.error("Update matched 0 rows. targetId was:", targetId, "selectedInvoice was:", selectedInvoice);
+          alert("⚠️ Update ran but no invoice matched this ID. It was not saved. Check console for details.");
+          return;
+        }
 
         // Link NEW advance_payments (PI- refs) on edit
         // CA- refs are handled by DB trigger automatically
@@ -781,7 +803,7 @@ const AddInvoiceModal = ({
             // Block only if linked to a DIFFERENT invoice
             if (
               advancePayment.linked_invoice_id &&
-              advancePayment.linked_invoice_id !== selectedInvoice.dbId
+              advancePayment.linked_invoice_id !== targetId
             ) {
               alert(`⚠️ Ref "${ref}" is already linked to a different invoice`);
               continue;
@@ -791,7 +813,7 @@ const AddInvoiceModal = ({
             const { data: existingPR } = await supabase
               .from("payments_received")
               .select("id")
-              .eq("invoice_id", selectedInvoice.dbId)
+              .eq("invoice_id", targetId)
               .eq("payment_ref", ref)
               .maybeSingle();
 
@@ -800,7 +822,7 @@ const AddInvoiceModal = ({
               await supabase
                 .from("advance_payments")
                 .update({
-                  linked_invoice_id: selectedInvoice.dbId,
+                  linked_invoice_id: targetId,
                   is_adjusted: true,
                 })
                 .eq("id", advancePayment.id);
@@ -813,7 +835,7 @@ const AddInvoiceModal = ({
               .from("payments_received")
               .insert([
                 {
-                  invoice_id: selectedInvoice.dbId,
+                  invoice_id: targetId,
                   amount_received: advancePayment.amount,
                   payment_date: advancePayment.payment_date,
                   payment_ref: advancePayment.payment_ref,
@@ -826,7 +848,7 @@ const AddInvoiceModal = ({
               await supabase
                 .from("advance_payments")
                 .update({
-                  linked_invoice_id: selectedInvoice.dbId,
+                  linked_invoice_id: targetId,
                   is_adjusted: true,
                 })
                 .eq("id", advancePayment.id);
@@ -900,6 +922,7 @@ const AddInvoiceModal = ({
 
       alert(selectedInvoice ? "✅ Invoice updated" : "✅ Invoice created");
       if (window.refreshClients) window.refreshClients();
+      onSaved?.();
       resetForm();
       onClose();
     } catch (err) {
@@ -1997,8 +2020,7 @@ const AddInvoiceModal = ({
                         <label className={lbl}>
                           Verto Fee Payout Date by Client
                         </label>
-                        <input
-                          type="date"
+                        <input                          type="date"
                           value={formData.vertoFeePayoutDate}
                           onChange={(e) =>
                             handleChange("vertoFeePayoutDate", e.target.value)
