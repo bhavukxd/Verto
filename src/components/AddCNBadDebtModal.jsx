@@ -1021,17 +1021,27 @@ const AddCNBadDebtModal = ({ isOpen, onClose, invoices = [], paymentReferences =
   const co_pf_cn = num(formData.coPf);
   const co_esi_cn = num(formData.coEsi);
 
-  // ── Max CN limit — use adjustedDetails so edit mode sees pre-CN outstanding ─
+  // ── FIX: Max CN limit — use adjustedDetails so edit mode sees pre-CN outstanding ─
+  // invoiceBaseValue = full pre-TDS amount (Pay + Verto + GST).
+  // "amountPayable" (outstanding) is a POST-TDS cash figure — TDS is never
+  // part of the cash you're owed. So when capping how much of Pay+Verto+GST
+  // can be written off via CN, we must add TDS back onto outstanding first.
+  // Without this, every invoice with TDS > 0 gets an artificially low cap
+  // and a full write-off can never be saved.
   const invoiceBaseValue = adjustedDetails
     ? num(adjustedDetails.netPay) + num(adjustedDetails.netVertoFee) + num(adjustedDetails.netGst)
     : Infinity;
 
+  const remainingBaseCollectible = adjustedDetails
+    ? num(adjustedDetails.amountPayable) + num(adjustedDetails.netTds)
+    : Infinity;
+
   const maxCN = adjustedDetails
-    ? Math.min(invoiceBaseValue, num(adjustedDetails.amountPayable))
+    ? Math.min(invoiceBaseValue, remainingBaseCollectible)
     : Infinity;
 
   const limitedByOutstanding =
-    adjustedDetails && num(adjustedDetails.amountPayable) < invoiceBaseValue;
+    adjustedDetails && remainingBaseCollectible < invoiceBaseValue;
 
   const overLimit = adjustedDetails && totalCN > maxCN + 1;
 
@@ -1051,7 +1061,7 @@ const AddCNBadDebtModal = ({ isOpen, onClose, invoices = [], paymentReferences =
 
     if (overLimit) {
       if (limitedByOutstanding) {
-        e.payCN = `CN total ₹${fmt(totalCN)} exceeds outstanding ₹${fmt(num(adjustedDetails.amountPayable))}`;
+        e.payCN = `CN total ₹${fmt(totalCN)} exceeds remaining collectible amount ₹${fmt(remainingBaseCollectible)} (outstanding ₹${fmt(num(adjustedDetails.amountPayable))} + TDS ₹${fmt(num(adjustedDetails.netTds))})`;
       } else {
         e.payCN = `CN total ₹${fmt(totalCN)} exceeds invoice base (Pay+Verto+GST) ₹${fmt(invoiceBaseValue)}`;
       }
@@ -1407,7 +1417,9 @@ const AddCNBadDebtModal = ({ isOpen, onClose, invoices = [], paymentReferences =
                       <span className="text-gray-500 font-medium">Max CN allowed:</span>
                       <span className="font-bold text-emerald-700">₹{fmt(maxCN)}</span>
                       <span className="text-gray-400">
-                        {limitedByOutstanding ? "(capped at outstanding amount)" : "(capped at invoice value excl. TDS)"}
+                        {limitedByOutstanding
+                          ? `(outstanding ₹${fmt(num(adjustedDetails.amountPayable))} + TDS ₹${fmt(num(adjustedDetails.netTds))})`
+                          : "(capped at invoice value excl. TDS)"}
                       </span>
                       {editingEntry && (
                         <span className="ml-auto text-amber-600 font-semibold">
@@ -1707,7 +1719,7 @@ const AddCNBadDebtModal = ({ isOpen, onClose, invoices = [], paymentReferences =
                         <AlertCircle className="w-4 h-4 text-red-500 mt-0.5 shrink-0" />
                         <div className="text-xs text-red-700 font-semibold">
                           {limitedByOutstanding ? (
-                            <>CN total ₹{fmt(totalCN)} exceeds the outstanding amount ₹{fmt(num(adjustedDetails.amountPayable))}. Reduce Pay, Verto Fee, or GST amounts.</>
+                            <>CN total ₹{fmt(totalCN)} exceeds the remaining collectible amount ₹{fmt(remainingBaseCollectible)} (outstanding ₹{fmt(num(adjustedDetails.amountPayable))} + TDS ₹{fmt(num(adjustedDetails.netTds))}). Reduce Pay, Verto Fee, or GST amounts.</>
                           ) : (
                             <>CN total ₹{fmt(totalCN)} exceeds the invoice base (Pay+Verto+GST = ₹{fmt(invoiceBaseValue)}). Reduce the amounts.</>
                           )}
